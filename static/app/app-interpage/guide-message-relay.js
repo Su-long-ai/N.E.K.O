@@ -41,7 +41,7 @@
         const scope = event.detail;
         if (!scope?.name) return;
         if (I.isStandaloneChatPage()) {
-            if (window.appChatAvatar?.getModelAvatarDataUrl?.()) return;
+            if (window.appChatAvatar?.hasCurrentModelAvatar?.()) return;
             I.postYuiGuideMessageToPet('request_avatar', {
                 lanlan_name: scope.name,
                 avatar_scope: scope,

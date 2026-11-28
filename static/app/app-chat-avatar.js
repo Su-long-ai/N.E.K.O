@@ -29,6 +29,8 @@
     let externalAvatarDataUrl = '';
     let externalAvatarModelType = '';
     let externalAvatarPreview = null;
+    let committedBroadcastAvatarScope = null;
+    let followerCommittedModel = null;
     // 新手教程期间的临时头像覆盖：只驻留内存，不写入用户角色头像缓存。
     let tutorialAvatarOverrideDataUrl = '';
     let tutorialAvatarOverrideModelType = '';
@@ -365,10 +367,14 @@
         if (typeof window.avatarPortrait?.normalizeModelType === 'function') {
             return window.avatarPortrait.normalizeModelType();
         }
-        const modelType = String(window.lanlan_config?.model_type || '').toLowerCase();
+        return modelTypeFromConfig(window.lanlan_config);
+    }
+
+    function modelTypeFromConfig(config) {
+        const modelType = String(config?.model_type || '').toLowerCase();
         if (modelType === 'pngtuber') return 'pngtuber';
         if (modelType === 'live3d') {
-            const subType = String(window.lanlan_config?.live3d_sub_type || '').toLowerCase();
+            const subType = String(config.live3d_sub_type || '').toLowerCase();
             if (subType === 'mmd') return 'mmd';
             if (subType === 'vrm') return 'vrm';
         }
@@ -379,17 +385,13 @@
 
     function getCurrentModelCacheKey() {
         const modelType = getCurrentModelType();
+        if (followerCommittedModel) {
+            return followerCommittedModel.name === window.lanlan_config?.lanlan_name &&
+                followerCommittedModel.type === modelType && followerCommittedModel.key
+                ? followerCommittedModel.key : modelType + ':';
+        }
         if (modelType === 'pngtuber') {
-            const config = window.pngtuberManager?.config || window.lanlan_config?.pngtuber || {};
-            const identity = {
-                layeredMetadata: normalizeModelIdentityPart(config.layered_metadata),
-                idleImage: normalizeModelIdentityPart(config.idle_image),
-                talkingImage: normalizeModelIdentityPart(config.talking_image)
-            };
-            if (!identity.layeredMetadata && !identity.idleImage && !identity.talkingImage) {
-                return 'pngtuber:';
-            }
-            return 'pngtuber:' + JSON.stringify(identity);
+            return pngtuberCacheKey(window.pngtuberManager?.config || window.lanlan_config?.pngtuber);
         }
         if (modelType === 'vrm') {
             return 'vrm:' + String(
@@ -412,6 +414,15 @@
             window.cubism4Model ||
             ''
         );
+    }
+
+    function pngtuberCacheKey(config) {
+        const identity = {
+            layeredMetadata: normalizeModelIdentityPart(config?.layered_metadata),
+            idleImage: normalizeModelIdentityPart(config?.idle_image),
+            talkingImage: normalizeModelIdentityPart(config?.talking_image)
+        };
+        return 'pngtuber:' + (Object.values(identity).some(Boolean) ? JSON.stringify(identity) : '');
     }
 
     function normalizeModelIdentityPart(value) {
@@ -450,6 +461,11 @@
         return /^\/chat(?:_full)?(?:\/|$)/.test(pathname);
     }
 
+    function getFollowerPreviewIdentity(modelKey) {
+        const {lanlan_name: name, switch_revision: revision} = window.lanlan_config || {};
+        return isCardDropIdentityFollowerWindow() && name ? {name, revision: revision || 0, modelKey} : null;
+    }
+
     function advanceCardDropModelRevision() {
         cardDropModelRevision = Math.max(cardDropModelRevision + 1, Date.now());
     }
@@ -473,14 +489,15 @@
         return scope.modelKey === getCurrentModelCacheKey() ? 'current' : 'stale';
     }
 
-    function modelPreviewForDisplay() {
-        if (cachedPreview?.dataUrl && getExternalAvatarScope(cachedPreview) !== 'stale') {
+    function modelPreviewForDisplay(currentOnly = false) {
+        const cacheScope = getExternalAvatarScope(cachedPreview);
+        if (cachedPreview?.dataUrl && (cacheScope === 'current' || (!currentOnly && cacheScope === 'unverified'))) {
             return cachedPreview;
         }
         const scope = getExternalAvatarScope(externalAvatarPreview);
         // Same-model reloads may invalidate the capture cache without changing the IPC owner.
         if (scope === 'current') return externalAvatarPreview;
-        return loadFromStorage() || (scope === 'unverified' ? externalAvatarPreview : null);
+        return loadFromStorage() || (!currentOnly && scope === 'unverified' ? externalAvatarPreview : null);
     }
 
     function isRasterImageDataUrl(value) {
@@ -1723,12 +1740,7 @@
             );
             setPreviewNote(translateLabel('chat.avatarPreviewReadyHint', '这是从当前模型画布实时提取的头像预览。'));
         } else if (stored) {
-            cachedPreview = {
-                cacheKey: stored.cacheKey || getCurrentModelCacheKey(),
-                dataUrl: stored.dataUrl,
-                modelType: stored.modelType,
-                capturedAt: stored.capturedAt
-            };
+            cachedPreview = { ...stored, ipcIdentity: getFollowerPreviewIdentity(stored.cacheKey) };
             syncAvatarToCardDrop(cachedPreview.dataUrl);
             setPreviewImage(cachedPreview.dataUrl);
             setPreviewStatus(
@@ -1823,8 +1835,6 @@
         return mod.getModelAvatarDataUrl();
     };
 
-    let committedBroadcastAvatarScope = null;
-
     function getCommittedBroadcastAvatarScope() {
         const scope = committedBroadcastAvatarScope;
         const config = window.lanlan_config;
@@ -1841,10 +1851,34 @@
 
     // Observe the character commit, not the early configuration/revision assignment.
     // The Pet and its follower can finish the same switch in either order.
-    mod.onCharacterScopeCommitted = function (name, revision) {
+    mod.onCharacterScopeCommitted = function (name, revision, refreshFollowerModel = false) {
         const config = window.lanlan_config;
+        if (!name || name !== config?.lanlan_name) return;
+        if (isCardDropIdentityFollowerWindow() && (refreshFollowerModel ||
+            (followerCommittedModel?.name === name && !followerCommittedModel.key &&
+                followerCommittedModel.revision !== revision))) {
+            // Chat has no renderer to update its bootstrap key. Resolve the same named
+            // page configuration used at startup, without delaying the character commit.
+            const observedRevision = config.switch_revision;
+            const model = {name, revision, type: getCurrentModelType(), key: ''};
+            followerCommittedModel = model;
+            if (revision && revision !== config.switch_revision) return;
+            fetch('/api/config/page_config?lanlan_name=' + encodeURIComponent(name), {cache: 'no-store'})
+                .then(response => response.ok ? response.json() : null)
+                .then(data => {
+                    if (!data?.success || data.lanlan_name !== name || model !== followerCommittedModel ||
+                        window.lanlan_config?.lanlan_name !== name || getCurrentModelType() !== model.type ||
+                        window.lanlan_config.switch_revision !== observedRevision ||
+                        modelTypeFromConfig(data) !== model.type) return;
+                    model.key = model.type === 'pngtuber' ? pngtuberCacheKey(data.pngtuber)
+                        : model.type + ':' + (typeof data.model_path === 'string' ? data.model_path.trim() : '');
+                    if (model.key.endsWith(':')) { model.key = ''; return; }
+                    mod.onCharacterScopeCommitted(name, revision);
+                }).catch(() => { /* No verified model identity; do not request with the bootstrap key. */ });
+            return;
+        }
         const modelKey = getCurrentModelCacheKey();
-        if (!name || name !== config?.lanlan_name || !Number.isSafeInteger(revision) ||
+        if (!Number.isSafeInteger(revision) ||
             revision <= 0 || revision !== config.switch_revision || !modelKey || modelKey.endsWith(':')) return;
         const scope = { name, revision, modelKey };
         if (isCommittedBroadcastAvatarScope(scope)) return;
@@ -1870,6 +1904,10 @@
     // The model avatar alone: never the tutorial override or the persisted custom image.
     mod.getModelAvatarDataUrl = function getModelAvatarDataUrl() {
         return modelPreviewForDisplay()?.dataUrl || '';
+    };
+
+    mod.hasCurrentModelAvatar = function () {
+        return !!modelPreviewForDisplay(true);
     };
 
     mod.getCurrentAvatarModelType = function getCurrentAvatarModelType() {
@@ -1917,7 +1955,6 @@
         if (externalAvatarDataUrl) {
             const key = getCurrentModelCacheKey();
             const follower = isCardDropIdentityFollowerWindow();
-            const {lanlan_name: name, switch_revision: revision} = window.lanlan_config || {};
             cachedPreview = {
                 cacheKey: key,
                 dataUrl: externalAvatarDataUrl,
@@ -1925,7 +1962,7 @@
                 capturedAt: Date.now(),
                 // Chat followers may show the owner window's portrait but do not own its cache.
                 displayOnly: follower,
-                ipcIdentity: follower && name ? {name, revision: revision || 0, modelKey: key} : null,
+                ipcIdentity: getFollowerPreviewIdentity(key),
             };
             externalAvatarPreview = cachedPreview;
             publishPreview(cachedPreview);

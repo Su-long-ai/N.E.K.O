@@ -10,6 +10,7 @@ from tests.node_harness import run_node_script
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.frontend_contract
 def test_chat_avatar_browser_module_integration():
     node = shutil.which("node")
     if node is None:

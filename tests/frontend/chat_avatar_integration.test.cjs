@@ -1058,3 +1058,4 @@ test('retired websocket still forwards stamped character-switch control frames',
 
 // This suite is loaded by the existing pytest integration gate.
 require("./chat_avatar_bc_scope.test.cjs");
+require("./chat_avatar_follower_storage.test.cjs");

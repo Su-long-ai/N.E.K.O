@@ -10,7 +10,12 @@ const wrong = 'data:image/png;base64,d3Jvbmc=';
 const queue = [];
 const windows = [];
 function fixture(route, type, options = {}) {
-    const modelKey = type === 'vrm' ? 'vrm:/Shared.vrm' : 'live2d:/Shared.model3.json';
+    const defaultModelPath = type === 'vrm' ? '/Shared.vrm' : '/Shared.model3.json';
+    const modelKey = type + ':' + defaultModelPath;
+    const cards = options.cards || Object.fromEntries(['A', 'B', 'C'].map(name => [name,
+        type === 'vrm' ? {model_type: type, vrm: defaultModelPath} : {model_type: type, live2d: defaultModelPath}
+    ]));
+    const pageConfigReads = [];
     const listeners = new Map();
     const store = new Map();
     const writes = [];
@@ -69,10 +74,24 @@ function fixture(route, type, options = {}) {
             removeItem: key => store.delete(key),
             setItem(key, value) { writes.push(key); store.set(key, value); }
         },
-        fetch: async (url, options) => {
-            if (options?.method === 'POST') requests.push(url);
+        fetch: async (url, init) => {
+            if (init?.method === 'POST') requests.push(url);
             if (url === '/api/characters' && window.appState.isSwitchingCatgirl && ++characterReads === 1) await firstCharacterRead?.();
-            return {ok: true, json: async () => ({'猫娘': {A: {model_type: type}, B: {model_type: type}, C: {model_type: type}}})};
+            const match = url.match(/^\/api\/config\/page_config\?lanlan_name=(.+)$/);
+            if (match) {
+                const name = decodeURIComponent(match[1]);
+                pageConfigReads.push(name);
+                if (options.readPageConfig) await options.readPageConfig(name);
+                const card = cards[name];
+                const data = options.pageConfigs?.[name] || {
+                    success: true, lanlan_name: name, model_type: card.model_type,
+                    live3d_sub_type: card.live3d_sub_type,
+                    model_path: card.vrm || card.mmd || card.live2d || '',
+                    pngtuber: card.pngtuber,
+                };
+                return {ok: true, json: async () => data};
+            }
+            return {ok: true, json: async () => ({'猫娘': cards})};
         },
     });
     const load = name => vm.runInContext(readFileSync(path.join(root, name), 'utf8'), ctx, {filename: name});
@@ -87,7 +106,7 @@ function fixture(route, type, options = {}) {
         postYuiGuideMessageToPet(action, detail) { queue.push({from: route, to: '/', action, ...detail}); },
         postYuiGuideMessageToChat(action, detail) { queue.push({from: route, to: '/chat', action, ...detail}); },
     });
-    if (route === '/') store.set('neko_avatar:A', JSON.stringify({dataUrl: portraitA, modelType: type, cacheKey: modelKey}));
+    if (route === '/' || options.fromStorage) store.set('neko_avatar:A', JSON.stringify({dataUrl: portraitA, modelType: type, cacheKey: modelKey}));
     load('static/app/app-chat-avatar.js');
     load('static/app/app-interpage/guide-message-relay.js');
     load('static/app/app-character.js');
@@ -99,7 +118,7 @@ function fixture(route, type, options = {}) {
         assert.equal(callbacks.length, 1);
         callbacks[0][0]();
     };
-    const result = {window, dataUrl, event, store, writes, commits, modelKey, requests, received, runWatchdog};
+    const result = {window, dataUrl, event, store, writes, commits, modelKey, requests, received, runWatchdog, pageConfigReads};
     windows.push(result);
     return result;
 }
@@ -324,3 +343,121 @@ for (const [route, type] of [['/chat', 'vrm'], ['/chat_full', 'live2d']]) {
         });
     }
 }
+
+function scopedRequests(route, name) {
+    return queue.filter(item => item.from === route && item.action === 'request_avatar' && item.avatar_scope?.name === name);
+}
+
+for (const route of ['/chat', '/chat_full']) {
+    test(route + ' retires a cold-start portrait from A storage and requests the exact uncached B scope', async () => {
+        windows.length = 0; queue.length = 0;
+        const owner = fixture('/', 'vrm');
+        const follower = fixture(route, 'vrm', {fromStorage: true});
+        // A starts with durable owner-written bytes. No avatar_updated or local capture after startup.
+        assert.equal(follower.dataUrl(), portraitA);
+        assert.equal(follower.store.has('neko_avatar:B'), false);
+        await switchFollower(follower, 'B', 'A', 11);
+        assert.equal(follower.dataUrl(), '', 'uncached B must never display the A storage portrait');
+        assert.deepEqual(scopedRequests(route, 'B').map(packet => packet.avatar_scope.modelKey), ['vrm:/Shared.vrm']);
+        await flush(); // Owner intentionally still A when the first B request is processed.
+        ownerCompletes(owner, 'B', 11, 'vrm');
+        await flush();
+        assert.equal(follower.dataUrl(), portraitA, 'B can display the same model only after exact fresh owner proof');
+        assert.equal(follower.store.has('neko_avatar:B'), false, 'followers must not persist owner replies');
+        assert.deepEqual(follower.writes, []);
+    });
+
+    for (const [modelType, modelPath, card, pageConfig] of [
+        ['vrm', '/user_vrm/N%20Alt.vrm', {model_type: 'vrm', vrm: 'N Alt.vrm'},
+            {model_type: 'live3d', live3d_sub_type: 'vrm', model_path: '/user_vrm/N%20Alt.vrm'}],
+        ['mmd', '/user_mmd/N.pmx', {model_type: 'live3d', live3d_sub_type: 'mmd', mmd: 'N.pmx'},
+            {model_type: 'live3d', live3d_sub_type: 'mmd', model_path: '/user_mmd/N.pmx'}],
+        ['live2d', '/workshop/42/N.model3.json', {model_type: 'live2d', live2d: 'N.model3.json'},
+            {model_type: 'live2d', model_path: '/workshop/42/N.model3.json'}],
+        ['pngtuber', '{"layeredMetadata":"","idleImage":"/static/N.png","talkingImage":"/static/N-talk.png"}',
+            {model_type: 'pngtuber', pngtuber: {idle_image: 'N.png', talking_image: 'N-talk.png'}},
+            {model_type: 'pngtuber', model_path: '/static/N.png', pngtuber: {idle_image: '/static/N.png', talking_image: '/static/N-talk.png'}}]
+    ]) {
+        test(route + ' uses the committed ' + modelType + ' identity across A/M → C/N → uncached D/N', async () => {
+            windows.length = 0; queue.length = 0;
+            const cards = {A: {model_type: 'vrm', vrm: '/Shared.vrm'}, C: card, D: card};
+            const pageConfigs = Object.fromEntries(['C', 'D'].map(name => [name,
+                {...pageConfig, success: true, lanlan_name: name}]));
+            const follower = fixture(route, 'vrm', {cards, pageConfigs});
+            await switchFollower(follower, 'C', 'A', 11);
+            queue.length = 0;
+            await switchFollower(follower, 'D', 'C', 12);
+            const modelKey = modelType + ':' + modelPath;
+            assert.deepEqual(scopedRequests(route, 'D').map(p => p.avatar_scope.modelKey), [modelKey]);
+            const packet = {action:'avatar_updated', lanlan_name:'D', dataUrl:wrong, modelType, avatar_source:'pet',
+                avatar_scope:{name:'D',revision:12,modelKey}};
+            await follower.event({...packet, avatar_scope:{...packet.avatar_scope, modelKey:'vrm:/Shared.vrm'}});
+            assert.equal(follower.dataUrl(), '', 'previous boot key must not accept a reply');
+            await follower.event({...packet, avatar_scope:{...packet.avatar_scope, revision:11}});
+            assert.equal(follower.dataUrl(), '', 'previous revision must not accept a reply');
+            await follower.event({...packet, dataUrl:portraitA});
+            assert.equal(follower.dataUrl(), portraitA);
+            assert.deepEqual(follower.writes, []);
+        });
+    }
+}
+
+test('a delayed named model read cannot publish a superseded follower scope or delay chat commit', async () => {
+    windows.length = 0; queue.length = 0;
+    const slow = hold();
+    const follower = fixture('/chat', 'vrm', {fromStorage:true, readPageConfig: name => name === 'B' ? slow.promise : null});
+    await switchFollower(follower, 'B', 'A', 11);
+    assert.equal(follower.dataUrl(), '');
+    assert.equal(scopedRequests('/chat','B').length, 0, 'do not send the bootstrap key while B identity is pending');
+    await switchFollower(follower, 'C', 'B', 12);
+    assert.deepEqual(committedRevisions(follower), [12]);
+    slow.release();
+    await settleSwitch();
+    assert.deepEqual(committedRevisions(follower), [12], 'late B must not supersede C');
+    assert.equal(scopedRequests('/chat','B').length, 0);
+    assert.deepEqual(follower.pageConfigReads, ['B', 'C']);
+});
+
+test('a latest same-name receipt starts a fresh lookup while the previous one is pending', async () => {
+    windows.length = 0; queue.length = 0;
+    const slow = hold();
+    let reads = 0;
+    const follower = fixture('/chat', 'vrm', {readPageConfig: () => ++reads === 1 ? slow.promise : null});
+    await switchFollower(follower, 'B', 'A', 11);
+    await queueSwitch(follower, 'B', 'B', 12);
+    await settleSwitch();
+    assert.deepEqual(committedRevisions(follower), [12]);
+    assert.deepEqual(follower.commits, ['B'], 'a newer same-name receipt is not a chat reload');
+    slow.release();
+    await settleSwitch();
+    assert.deepEqual(committedRevisions(follower), [12]);
+    assert.deepEqual(follower.pageConfigReads, ['B', 'B']);
+});
+
+test('unverified named model never falls back to the prior boot path; a verified target cache avoids a request', async () => {
+    windows.length = 0; queue.length = 0;
+    const follower = fixture('/chat_full', 'vrm', {fromStorage:true, pageConfigs: {
+        B: {success:true, lanlan_name:'A', model_type:'vrm', model_path:'/Shared.vrm'}
+    }});
+    follower.store.set('neko_avatar:C',JSON.stringify({
+        dataUrl:wrong, modelType:'vrm', cacheKey:'vrm:/Shared.vrm',
+    }));
+    await switchFollower(follower,'B','A',11);
+    assert.equal(follower.dataUrl(), '');
+    assert.equal(scopedRequests('/chat_full','B').length, 0);
+    await switchFollower(follower,'C','B',12);
+    assert.equal(follower.dataUrl(),wrong);
+    assert.equal(scopedRequests('/chat_full','C').length, 0);
+    assert.deepEqual(follower.writes, []);
+});
+
+test('legacy unstamped follower switches still discard the old role and accept the named legacy portrait', async () => {
+    windows.length = 0; queue.length = 0;
+    const follower = fixture('/chat', 'vrm', {fromStorage:true});
+    await switchFollower(follower,'B','A',0);
+    assert.equal(follower.dataUrl(),'');
+    assert.equal(scopedRequests('/chat','B').length,0);
+    await follower.event({action:'avatar_updated', lanlan_name:'B', dataUrl:wrong, modelType:'vrm'});
+    assert.equal(follower.dataUrl(),wrong);
+    assert.deepEqual(follower.writes,[]);
+});
