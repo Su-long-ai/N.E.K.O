@@ -229,8 +229,8 @@
     //   - On first mutation, read the token after the storage startup barrier.
     //   - If the server responds 403 with `error_code: 'csrf_validation_failed'`,
     //     refetch /api/config/page_config once, pick up the fresh token, and
-    //     retry the original request exactly once. Subsequent requests reuse
-    //     the refreshed token.
+    //     retry the original request once only when the refresh gives a token.
+    //     Subsequent requests reuse the refreshed token.
     // ---------------------------------------------------------------------
     const CSRF_HEADER_NAME = 'X-CSRF-Token';
     const PAGE_CONFIG_URL = '/api/config/page_config';
@@ -306,20 +306,22 @@
         }
 
         async function getToken() {
-            return refreshPromise || cachedToken || refreshToken();
+            if (refreshPromise) return (await refreshPromise) || cachedToken;
+            return cachedToken || refreshToken();
         }
 
-        async function refreshToken() {
+        async function refreshToken({ freshOnly = false } = {}) {
             if (!refreshPromise) {
                 // Bootstrap and explicit refresh share the same direct read.
                 refreshPromise = fetchPageConfigToken().then(token => {
                     if (token) cachedToken = token;
-                    return cachedToken;
+                    return token;
                 }).finally(() => {
                     refreshPromise = null;
                 });
             }
-            return refreshPromise;
+            const token = await refreshPromise;
+            return freshOnly ? token : token || cachedToken;
         }
 
         function peekCachedToken() {
@@ -509,9 +511,11 @@
                 && typeof window.nekoLocalMutationSecurity.refreshToken === 'function'
                 && await readCsrfFailureMarker(response)
             ) {
-                await window.nekoLocalMutationSecurity.refreshToken();
-                const retryHeaders = await mergeMutationHeaders(baseHeaders, method);
-                response = await sendOnce(retryHeaders);
+                const token = await window.nekoLocalMutationSecurity.refreshToken({ freshOnly: true });
+                if (token) {
+                    const retryHeaders = Object.assign({}, headersWithCsrf, { [CSRF_HEADER_NAME]: token });
+                    response = await sendOnce(retryHeaders);
+                }
             }
 
             if (!response.ok) {

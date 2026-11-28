@@ -141,3 +141,55 @@ test('local mutation token: explicit refresh joins an already in-flight direct r
     assert.equal(header(await first), 'one-fixture');
     assert.equal(gets, 1);
 });
+
+const csrfRejection = () => ({
+    ok: false,
+    status: 403,
+    json: async () => ({ error_code: 'csrf_validation_failed' }),
+});
+const protectedDecision = '/api/autostart-prompt/decision';
+const laterDecision = { method: 'POST', json: { decision: 'later' } };
+for (const initiallyCached of [false, true]) {
+    test('local mutation token: a failed refresh neither reads again nor repeats the rejected decision (cached=' + initiallyCached + ')', async () => {
+        const log = [];
+        let reads = 0;
+        const lane = setup(Promise.resolve({ canContinue: true }), async (url, init) => {
+            log.push([url, init.method || 'GET', header(init.headers || {})]);
+            if (url === configUrl) {
+                return ++reads === 1 && initiallyCached ? success('stale-fixture') : { ok: false, status: 503 };
+            }
+            assert.equal(url, protectedDecision);
+            return csrfRejection();
+        });
+
+        await assert.rejects(lane.tools.requestJson(protectedDecision, laterDecision), { status: 403, code: 'csrf_validation_failed' });
+        assert.deepEqual(log, [
+            [configUrl, 'GET', undefined],
+            [protectedDecision, 'POST', initiallyCached ? 'stale-fixture' : undefined],
+            [configUrl, 'GET', undefined],
+        ], 'use only the actual refresh result, not another read or the already-rejected token');
+        assert.equal(lane.pendingTimers, 0);
+    });
+}
+
+test('local mutation token: a successful refresh retries the original decision exactly once with the returned value', async () => {
+    const log = [];
+    let reads = 0, sends = 0;
+    const lane = setup(Promise.resolve({ canContinue: true }), async (url, init) => {
+        log.push([url, init.method || 'GET', header(init.headers || {}), init.body]);
+        if (url === configUrl) return ++reads === 1 ? { ok: false, status: 503 } : success('fresh-fixture');
+        assert.equal(url, protectedDecision);
+        return ++sends === 1 ? csrfRejection() : { ok: true, status: 200, json: async () => ({ accepted: true }) };
+    });
+
+    assert.equal((await lane.tools.requestJson(protectedDecision, laterDecision)).accepted, true);
+    const body = '{"decision":"later"}';
+    assert.deepEqual(log, [
+        [configUrl, 'GET', undefined, undefined],
+        [protectedDecision, 'POST', undefined, body],
+        [configUrl, 'GET', undefined, undefined],
+        [protectedDecision, 'POST', 'fresh-fixture', body],
+    ]);
+    assert.equal(header(await lane.token.getMutationHeaders()), 'fresh-fixture');
+    assert.equal(reads, 2);
+});
