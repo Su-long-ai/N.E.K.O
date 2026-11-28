@@ -203,6 +203,9 @@ let changed = false
  */
 const answered = new Map<string, PanelRow>()
 
+/** Moves when a panel from the tab shows another source: answers asked for before belong to the old one. */
+let sourceGeneration = 0
+
 /** A panel the server returned after the answers given here: it wins, and updates them. */
 function showFresh(next: PermissionPanel) {
   for (const permission of [...answered.keys()]) {
@@ -224,7 +227,10 @@ function sourceChanged(next: PermissionPanel, shown: PermissionPanel) {
 watch(
   () => props.panel,
   (next) => {
-    if (sourceChanged(next, current.value)) answered.clear()
+    if (sourceChanged(next, current.value)) {
+      answered.clear()
+      sourceGeneration++
+    }
     // A tab panel that already shows an answer given here is as new: its row is used.
     for (const row of next.rows) {
       const kept = answered.get(row.permission)
@@ -251,10 +257,14 @@ const choices = computed(() => (usedRow.value ? conditionChoices(usedRow.value) 
 const lock = computed(() => (usedRow.value ? conditionLock(usedRow.value, current.value.manifest) : null))
 const condition = ref<PermissionCondition>('in_use')
 // What the tab's "Allow" would save, so the folded "When it may" changes nothing by itself.
+// A newer panel may take "any time" away from the same item: the choice is narrowed then.
 watch(
-  () => usedRow.value?.permission,
-  () => {
-    if (usedRow.value) condition.value = grantCondition(usedRow.value)
+  () => [usedRow.value?.permission, usedRow.value?.anytime_allowed] as const,
+  ([permission], previous) => {
+    const row = usedRow.value
+    if (!row) return
+    if (permission !== previous?.[0]) condition.value = grantCondition(row)
+    else if (row.anytime_allowed === false) condition.value = 'in_use'
   },
   { immediate: true },
 )
@@ -315,10 +325,13 @@ function itemLine(row: PanelRow) {
 async function save(row: PanelRow, state: 'granted' | 'denied', chosen?: PermissionCondition) {
   if (busy.value !== null) return false
   busy.value = row.permission
+  // An answer for a source the tab has since replaced is not shown.
+  const generation = sourceGeneration
   try {
     const keep = state === 'granted' ? grantCondition(row, chosen) : 'in_use'
     const next = await decidePermission(current.value.plugin_id, row.permission, state, keep)
     changed = true
+    if (generation !== sourceGeneration) return true
     if (validPanel(next)) {
       answered.set(row.permission, row)
       showFresh(next)
@@ -338,7 +351,7 @@ async function save(row: PanelRow, state: 'granted' | 'denied', chosen?: Permiss
     changed = true
     try {
       const held = await getPermissionPanel(current.value.plugin_id)
-      if (validPanel(held)) {
+      if (validPanel(held) && generation === sourceGeneration) {
         answered.set(row.permission, row)
         showFresh(held)
       }

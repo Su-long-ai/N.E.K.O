@@ -89,6 +89,10 @@ describe('itemUsage', () => {
     expect(itemUsage(item({ permission: NET, state: 'denied' }), covered)).toBeNull()
     expect(itemUsage(item({ permission: NET, state: 'granted', unused_30d: true }), covered)).toEqual({ kind: 'unused30d' })
   })
+  it('shows the last use of a system permission the server reports', () => {
+    const last = { at: '2026-11-28T06:00:00Z', origin_kind: null, outcome: 'allowed' as const }
+    expect(itemUsage(item({ permission: NET, last_used: last }), covered)).toMatchObject({ kind: 'last', at: last.at })
+  })
 })
 
 describe('pluginLines', () => {

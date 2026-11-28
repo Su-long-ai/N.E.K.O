@@ -131,7 +131,7 @@ export function usageLine(
 ): UsageLine {
   if (!row.usage_tracked) return null
   // A system use reported lost after the last recorded one may be the real last use.
-  if (row.last_used && row.permission.startsWith('system.') && lostAt && isAfter(lostAt, row.last_used.at)) return null
+  if (row.last_used && row.permission.startsWith('system.') && lostAt && lostAfter(lostAt, row.last_used.at)) return null
   if (row.last_used) {
     return {
       kind: 'last',
@@ -152,11 +152,16 @@ export function usageLine(
   return history.last_use_since ? { kind: 'unusedSince', since: history.last_use_since } : null
 }
 
-function isAfter(a: string, b: string): boolean {
-  const left = Date.parse(a)
-  const right = Date.parse(b)
-  // An unreadable time cannot show the last use is complete.
-  return Number.isNaN(left) || Number.isNaN(right) || left > right
+/**
+ * Whether entries were lost after the last recorded use. A loss time that is
+ * not a time (the privacy page has none per plugin) says nothing about it;
+ * an unreadable last use cannot be shown as the last one.
+ */
+function lostAfter(lostAt: string, lastAt: string): boolean {
+  const lost = Date.parse(lostAt)
+  if (Number.isNaN(lost)) return false
+  const last = Date.parse(lastAt)
+  return Number.isNaN(last) || lost > last
 }
 
 /** Uses while undecided: "N times" or "at least N times". */

@@ -227,6 +227,37 @@ describe('dialog ① before the first start', () => {
     expect(q(root, 'dialog-reset')).not.toBeNull()
   })
 
+  it('does not show a save answer that arrives after the tab showed another source', async () => {
+    const p = firstPanel()
+    const { root, props } = await mount({ panel: p, request: { kind: 'first', items: [NET] }, start: true })
+    let finish: (value: PermissionPanel) => void = () => {}
+    api.decidePermission.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    q(root, `dialog-allow-${NET}`)!.click()
+    await flush()
+    props.panel = { ...p, grants_reset: { at: null, reason: 'source_changed' } }
+    await flush()
+    finish(withState(p, { [NET]: 'granted' }))
+    await flush()
+    expect(q(root, `dialog-allow-${NET}`)!.dataset.type).toBeUndefined()
+    expect(q(root, 'dialog-reset')).not.toBeNull()
+  })
+
+  it('does not show a read after a failed save that arrives after the tab showed another source', async () => {
+    const p = firstPanel()
+    const { root, props } = await mount({ panel: p, request: { kind: 'first', items: [NET] }, start: true })
+    api.decidePermission.mockRejectedValueOnce(new Error('lost'))
+    let finish: (value: PermissionPanel) => void = () => {}
+    api.getPermissionPanel.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    q(root, `dialog-allow-${NET}`)!.click()
+    await flush()
+    props.panel = { ...p, grants_reset: { at: null, reason: 'source_changed' } }
+    await flush()
+    finish(withState(p, { [NET]: 'granted' }))
+    await flush()
+    expect(q(root, `dialog-allow-${NET}`)!.dataset.type).toBeUndefined()
+    expect(q(root, 'dialog-reset')).not.toBeNull()
+  })
+
   it('keeps what was read after a failed save against an older panel from the tab', async () => {
     const p = firstPanel()
     const { root, props } = await mount({ panel: p, request: { kind: 'first', items: [NET] }, start: true })
@@ -381,6 +412,27 @@ describe('dialog ② for an item used before it was decided', () => {
   it('grants an optional item "while I use it" when nothing was chosen', async () => {
     const p = firstPanel()
     const { root } = await mount({ panel: p, request: { kind: 'firstUse', permission: MEMORY }, pending: usedPending() })
+    api.decidePermission.mockResolvedValue(p)
+    q(root, 'dialog-allow')!.click()
+    await flush()
+    expect(api.decidePermission).toHaveBeenCalledWith('demo', MEMORY, 'granted', 'in_use')
+  })
+
+  it('narrows a chosen "any time" when a newer panel no longer allows it, and keeps it otherwise', async () => {
+    const p = firstPanel()
+    const { root, props } = await mount({ panel: p, request: { kind: 'firstUse', permission: MEMORY }, pending: usedPending() })
+    const anytime = q(root, 'dialog-when-anytime')!.querySelector('input')!
+    anytime.checked = true
+    anytime.dispatchEvent(new Event('change'))
+    await flush()
+    // A refresh that still allows it keeps the choice.
+    props.panel = { ...p, rows: p.rows.map((r) => ({ ...r })) }
+    await flush()
+    expect((q(root, 'dialog-when-anytime')!.querySelector('input') as HTMLInputElement).checked).toBe(true)
+    // The plugin no longer declares background use.
+    props.panel = { ...p, rows: p.rows.map((r) => (r.permission === MEMORY ? { ...r, anytime_allowed: false } : r)) }
+    await flush()
+    expect(q(root, 'dialog-when-anytime')).toBeNull()
     api.decidePermission.mockResolvedValue(p)
     q(root, 'dialog-allow')!.click()
     await flush()

@@ -96,6 +96,10 @@ describe('usageLine', () => {
   it('does not show a last use older than lost system entries as the last one', () => {
     const used = { at: '2026-11-20T10:00:00Z', origin_kind: null, outcome: 'allowed' as const }
     expect(usageLine(row({ last_used: used }), covered, '2026-11-25T00:00:00Z')).toBeNull()
+    // No loss time to compare: the last use is shown.
+    expect(usageLine(row({ last_used: used }), covered, 'unknown')).toMatchObject({ kind: 'last' })
+    // A last use whose time cannot be read is not shown as the last one after a loss.
+    expect(usageLine(row({ last_used: { ...used, at: 'x' } }), covered, '2026-11-25T00:00:00Z')).toBeNull()
     // Lost before the last use: that use is still the last one.
     expect(usageLine(row({ last_used: used }), covered, '2026-11-19T00:00:00Z')).toMatchObject({ kind: 'last' })
     // Lost system entries say nothing about a non-system permission.
