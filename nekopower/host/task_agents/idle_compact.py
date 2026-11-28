@@ -41,6 +41,7 @@ class IdleCompactMixin:
     # -- summing up idle sessions -------------------------------------------
 
     def _drop_idle_timer(self, session_id: str) -> None:
+        self._idle_schedule_gen[session_id] = self._idle_schedule_gen.get(session_id, 0) + 1
         timer = self._idle_timers.pop(session_id, None)
         if timer is not None:
             timer.cancel()
@@ -52,6 +53,16 @@ class IdleCompactMixin:
         is summed up for it: it is looked up when the time comes.)
         """
         kept = await self._ledger.get_session(session_id)
+        if kept is not None and kept.preset_told and kept.preset_told != kept.preset:
+            # Given another preset since its task agent last started, and with it the model it
+            # is sent to from its next start (``change_duty``): what is on record is
+            # where it goes next, not where it last ran. Nothing of it goes there until the
+            # user goes on with it, as below.
+            return None
+        if kept is not None and kept.model_was and kept.model_was != kept.model_ident:
+            # The same where the preset it has is the one it was told of: given another and
+            # then this one again, with what this one is sent to set to another model meanwhile.
+            return None
         choice = await self.session_model(kept, record=False) if kept is not None else await self._new_session_model()
         config = choice.config
         if kept is not None and kept.model_ident and choice.ident != kept.model_ident:
@@ -156,6 +167,8 @@ class IdleCompactMixin:
             # nothing new has been asked for in it since: the host makes
             # no request for it by itself (``drop_idle_work``).
             return
+        gen = self._idle_schedule_gen.get(session_id, 0) + 1
+        self._idle_schedule_gen[session_id] = gen
         stops = self._idle_stops
         if idle_for is None:
             if not await self._idle_compact_wanted(session_id):
@@ -171,15 +184,27 @@ class IdleCompactMixin:
             # Looked at again after the wait: the session may have been taken
             # by a commission meanwhile (that drops its timer, and sets
             # another when it is over), everything stopped, or the host
-            # shut down. And another look at the same session may have set
-            # a timer in the meantime: it is replaced.
-            if (
-                self._closed
-                or stops != self._idle_stops
-                or session_id in self._idle_stopped
-                or not self._idle_now(session_id)
-            ):
-                return
+            # shut down. If a transcript-preserving cleanup hold (outputs or
+            # work_dir) claimed the session in the meantime, wait for it to
+            # finish and re-verify before setting the timer.
+            while True:
+                if (
+                    self._closed
+                    or stops != self._idle_stops
+                    or session_id in self._idle_stopped
+                    or self._idle_schedule_gen.get(session_id) != gen
+                ):
+                    return
+                if self._idle_now(session_id):
+                    break
+                clearing = self._clearing.get(session_id)
+                if (
+                    clearing is None
+                    or session_id in self._clearing_drops_transcript
+                    or self._in_use_excluding_clearing(session_id)
+                ):
+                    return
+                await clearing.wait()
             self._drop_idle_timer(session_id)
         if after is None:
             after = idle_for
@@ -343,19 +368,34 @@ class IdleCompactMixin:
         from config.nekopower_settings import TASK_AGENT_IDLE_COMPACT_ENABLED, TASK_AGENT_IDLE_COMPACT_SECONDS
         from nekopower.runtime.protocol import GatewaySpec
 
-        if not TASK_AGENT_IDLE_COMPACT_ENABLED or not self._idle_now(session_id):
-            return False
-        if stops is not None and stops != self._idle_stops:
-            # Everything was stopped between the timer and this.
-            return False
-        if not self._is_switched_on():
-            return False
-        if not await self._idle_compact_wanted(session_id):
-            # Switched off since the timer was set: it comes due and does nothing.
-            return False
-        if not self._idle_now(session_id) or (stops is not None and stops != self._idle_stops):
-            # Taken by a commission, or everything stopped, while that was looked up.
-            return False
+        while True:
+            if self._closed or not TASK_AGENT_IDLE_COMPACT_ENABLED:
+                return False
+            if stops is not None and stops != self._idle_stops:
+                # Everything was stopped between the timer and this.
+                return False
+            clearing = self._clearing.get(session_id)
+            if clearing is not None:
+                if session_id in self._clearing_drops_transcript:
+                    return False
+                # Wait for a concurrent non-transcript file hold (e.g. outputs or work_dir cleanup)
+                # before deciding whether the session can still be idle-compacted.
+                await clearing.wait()
+                continue
+            if not self._idle_now(session_id) or not self._is_switched_on():
+                return False
+            if not await self._idle_compact_wanted(session_id):
+                # Switched off since the timer was set: it comes due and does nothing.
+                return False
+            if self._closed or (stops is not None and stops != self._idle_stops):
+                return False
+            if session_id in self._clearing:
+                # A file hold started while settings were queried; wait for it and re-verify.
+                continue
+            if not self._idle_now(session_id) or not self._is_switched_on():
+                # Taken by a commission, or switched off, while that was looked up.
+                return False
+            break
         task = asyncio.current_task()
         assert task is not None
         # Claimed before anything is awaited: a commission that takes the
@@ -435,6 +475,10 @@ class IdleCompactMixin:
             if not await self._ledger.begin_compacting(session_id):
                 return False
             model = await self._model_of(config)
+            # What the session may do, as when it is started for a commission: its token for
+            # the gateway calls nothing where its preset is without the tool that calls, and
+            # is not left to the list of its tools to see to.
+            template = await self._template_of(kept)
             gateway_spec = None
             if self._gateway is not None:
                 # Make gateway tools available for the summary request. The next
@@ -442,11 +486,14 @@ class IdleCompactMixin:
                 url = await self._gateway.start()
                 gateway_spec = GatewaySpec(
                     url=url,
-                    token=self._gateway.issue(grant, candidate_plugin_ids=(), supports_images=model.supports_images),
+                    token=self._gateway.issue(
+                        grant, candidate_plugin_ids=(), supports_images=model.supports_images,
+                        reads_only=kept.kind == "fork" or template.calls_nothing,
+                    ),
                 )
             spec = await self._spec(
                 commission, kept, model, workdir=workdir, session_dir=session_path, gateway=gateway_spec,
-                idle_compaction=True,
+                idle_compaction=True, template=template,
             )
             runtime = self._runtimes.builtin()
             if self._pump is None:
