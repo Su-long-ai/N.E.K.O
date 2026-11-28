@@ -185,7 +185,7 @@ const messages: PluginConsentMessages = {
     pending: {
       label: "待你处理：",
       to_confirm: "{n} 个插件等你确认",
-      upgraded: "{n} 个升级后多要了权限",
+      upgraded: "{n} 个还有权限没决定",
       inferred: "{n} 项旧插件推断的权限",
       first_use: "{n} 项还没决定时用到过",
       go: "去看",

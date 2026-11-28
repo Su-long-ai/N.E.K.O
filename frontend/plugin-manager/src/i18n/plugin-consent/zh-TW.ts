@@ -185,7 +185,7 @@ const messages: PluginConsentMessages = {
     pending: {
       label: "待你處理：",
       to_confirm: "{n} 個外掛等你確認",
-      upgraded: "{n} 個升級後多要了權限",
+      upgraded: "{n} 個還有權限沒決定",
       inferred: "{n} 項舊外掛推斷的權限",
       first_use: "{n} 項還沒決定時用到過",
       go: "去看",
