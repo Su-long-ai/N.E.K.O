@@ -331,7 +331,8 @@ async function save(row: PanelRow, state: 'granted' | 'denied', chosen?: Permiss
     const keep = state === 'granted' ? grantCondition(row, chosen) : 'in_use'
     const next = await decidePermission(current.value.plugin_id, row.permission, state, keep)
     changed = true
-    if (generation !== sourceGeneration) return true
+    // Saved for a source since replaced: the dialog stays open for the new one.
+    if (generation !== sourceGeneration) return false
     if (validPanel(next)) {
       answered.set(row.permission, row)
       showFresh(next)

@@ -242,6 +242,25 @@ describe('dialog ① before the first start', () => {
     expect(q(root, 'dialog-reset')).not.toBeNull()
   })
 
+  it('stays open in ② when the save answers after the tab showed another source', async () => {
+    const p = firstPanel()
+    const pending = { first_use: [{ plugin_id: 'demo', permission: MEMORY, at: '2026-11-20T10:00:00Z', count: 1, count_is_lower_bound: false }], incomplete: [] }
+    const { root, props, closed } = await mount({ panel: p, request: { kind: 'firstUse', permission: MEMORY }, pending })
+    let finish: (value: PermissionPanel) => void = () => {}
+    api.decidePermission.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    q(root, 'dialog-allow')!.click()
+    await flush()
+    props.panel = { ...p, grants_reset: { at: null, reason: 'source_changed' } }
+    await flush()
+    finish(withState(p, { [MEMORY]: 'granted' }))
+    await flush()
+    expect(closed).toEqual([])
+    expect(q(root, 'dialog-allow')).not.toBeNull()
+    // Closing now still has the tab read again: something was saved.
+    q(root, 'x')!.click()
+    expect(closed).toEqual([{ start: false, changed: true }])
+  })
+
   it('does not show a read after a failed save that arrives after the tab showed another source', async () => {
     const p = firstPanel()
     const { root, props } = await mount({ panel: p, request: { kind: 'first', items: [NET] }, start: true })
