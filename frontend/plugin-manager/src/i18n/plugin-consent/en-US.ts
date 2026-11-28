@@ -184,7 +184,7 @@ const messages = {
     pending: {
       label: "Needs you: ",
       to_confirm: "{n} plugin(s) waiting for you to confirm",
-      upgraded: "{n} still have permissions not decided",
+      upgraded: "{n} plugin(s) still have permissions not decided",
       inferred: "{n} permission(s) inferred for older plugins",
       first_use: "{n} used before you decided",
       go: "Review",

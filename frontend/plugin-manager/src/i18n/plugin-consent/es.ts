@@ -185,7 +185,7 @@ const messages: PluginConsentMessages = {
     pending: {
       label: "Pendiente: ",
       to_confirm: "{n} plugin(s) esperan tu confirmación",
-      upgraded: "{n} aún tienen permisos sin decidir",
+      upgraded: "{n} plugin(s) aún con permisos sin decidir",
       inferred: "{n} permiso(s) deducidos para plugins antiguos",
       first_use: "{n} usados antes de que decidieras",
       go: "Ver",

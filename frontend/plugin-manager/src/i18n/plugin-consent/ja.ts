@@ -185,7 +185,7 @@ const messages: PluginConsentMessages = {
     pending: {
       label: "対応待ち：",
       to_confirm: "確認待ちのプラグイン {n} 件",
-      upgraded: "まだ決めていない権限があるもの {n} 件",
+      upgraded: "まだ決めていない権限があるプラグイン {n} 件",
       inferred: "古いプラグインから推定した権限 {n} 件",
       first_use: "未決定のまま使われた権限 {n} 件",
       go: "確認する",

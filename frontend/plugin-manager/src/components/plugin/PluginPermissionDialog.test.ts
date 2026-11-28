@@ -516,10 +516,12 @@ describe('dialog wording', () => {
     }
     expect(JSON.stringify(zhCN.dialogs.upgrade)).not.toMatch(/更新|版本/)
     // The privacy page counts the same list: it does not claim an update either.
-    expect(zhCN.privacy.pending.upgraded).toBe('{n} 个还有权限没决定')
-    expect(allPluginConsentMessages['en-US'].privacy.pending.upgraded).toBe('{n} still have permissions not decided')
+    expect(zhCN.privacy.pending.upgraded).toBe('{n} 个插件还有权限没决定')
+    expect(allPluginConsentMessages['en-US'].privacy.pending.upgraded).toBe('{n} plugin(s) still have permissions not decided')
     for (const messages of Object.values(allPluginConsentMessages)) {
       expect(messages.privacy.pending.upgraded).not.toMatch(/升级|升級|更新|update|обновл|atualiz|actualiz|업데이트/i)
+      // It counts plugins, like the line before it.
+      expect(messages.privacy.pending.upgraded).toMatch(/插件|外掛|plugin|プラグイン|플러그인|плагин/i)
     }
   })
 })

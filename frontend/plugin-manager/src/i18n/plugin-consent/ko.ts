@@ -185,7 +185,7 @@ const messages: PluginConsentMessages = {
     pending: {
       label: "처리 대기: ",
       to_confirm: "확인을 기다리는 플러그인 {n}개",
-      upgraded: "아직 결정하지 않은 권한이 있는 것 {n}개",
+      upgraded: "아직 결정하지 않은 권한이 있는 플러그인 {n}개",
       inferred: "오래된 플러그인에서 추정한 권한 {n}개",
       first_use: "결정하기 전에 사용된 권한 {n}개",
       go: "보러 가기",
