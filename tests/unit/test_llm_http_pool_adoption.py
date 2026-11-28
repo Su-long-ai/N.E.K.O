@@ -923,6 +923,8 @@ async def test_deferred_borrower_aclose_stays_tracked_when_cancelled(monkeypatch
 
 
 def test_snapshot_http_proxy_config_handles_mixed_case_and_shares_proxy_lock(monkeypatch):
+    import urllib.request
+
     from main_routers.config_router import proxy as proxy_router
     from utils.http import PROXY_ENV_LOCK
     from utils.http.pool_utils import (
@@ -934,6 +936,9 @@ def test_snapshot_http_proxy_config_handles_mixed_case_and_shares_proxy_lock(mon
     assert proxy_router._PROXY_LOCK is PROXY_ENV_LOCK
 
     _clear_proxy_env(monkeypatch)
+    for attr in ("getproxies_registry", "getproxies_macosx_sysconf"):
+        if hasattr(urllib.request, attr):
+            monkeypatch.setattr(urllib.request, attr, lambda: {})
     monkeypatch.setenv("Https_Proxy", "http://127.0.0.1:7890")
     _, mount_map = snapshot_http_proxy_config()
     assert mount_map.get("https://") == "http://127.0.0.1:7890"
@@ -953,6 +958,11 @@ def test_snapshot_http_proxy_config_handles_mixed_case_and_shares_proxy_lock(mon
         [("Https_Proxy", "http://127.0.0.1:7890"), ("https_proxy", "")]
     )
     assert proxies_cleared == {}
+
+    proxies_mixed_suffix_cleared = _proxies_from_env_items(
+        [("HTTPS_PROXY", "http://127.0.0.1:7890"), ("HTTPS_proxy", "")]
+    )
+    assert proxies_mixed_suffix_cleared == {}
 
 
 @pytest.mark.asyncio

@@ -383,8 +383,8 @@ def _proxies_from_env_items(
     if has_request_method:
         proxies.pop("http", None)
     for name, value in env_items:
-        if name.islower() and name.endswith("_proxy"):
-            scheme = name[:-6]
+        if name.endswith("_proxy"):
+            scheme = name[:-6].lower()
             if value:
                 proxies[scheme] = value
             else:
