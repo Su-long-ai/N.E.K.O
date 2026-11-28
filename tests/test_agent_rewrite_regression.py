@@ -1962,7 +1962,7 @@ def test_avatar_model_initializers_skip_user_model_when_tutorial_boot_is_predict
         assert "shouldSkipUserModelBoot" in source
         assert "markUserModelBootSkipped" in source
 
-    live2d_inner = live2d_init_source.split("async function _initLive2DModelInner()", 1)[1].split(
+    live2d_inner = live2d_init_source.split("async function _initLive2DModelInner(", 1)[1].split(
         "// 检查是否在 VRM/MMD 模式下",
         1,
     )[0]
