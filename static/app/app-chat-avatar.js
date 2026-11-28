@@ -481,7 +481,7 @@
     }
 
     function getExternalAvatarScope(preview) {
-        const scope = preview?.ipcIdentity;
+        const scope = preview?.ipcIdentity || preview?.captureIdentity;
         if (!scope) return 'unverified';
         const config = window.lanlan_config;
         if (scope.name !== config?.lanlan_name || scope.revision !== (config.switch_revision || 0)) return 'stale';
@@ -818,7 +818,12 @@
         syncAvatarToCardDrop(preview.dataUrl);
     }
 
-    function applyPreviewResult(result, cacheKey, captureRevision) {
+    function isCaptureRoleCurrent(captureIdentity) {
+        return !isCardDropIdentityFollowerWindow() || getExternalAvatarScope({ captureIdentity }) === 'current';
+    }
+
+    function applyPreviewResult(result, cacheKey, captureRevision, captureIdentity) {
+        if (!isCaptureRoleCurrent(captureIdentity)) return false;
         if (
             !cacheKey ||
             cacheKey !== getCurrentModelCacheKey() ||
@@ -832,7 +837,8 @@
             cacheKey,
             dataUrl: result.dataUrl,
             modelType: result.modelType || getCurrentModelType(),
-            capturedAt: Date.now()
+            capturedAt: Date.now(),
+            captureIdentity
         };
         saveToStorage(cachedPreview);
         syncAvatarToCardDrop(cachedPreview.dataUrl);
@@ -1413,6 +1419,7 @@
         const token = ++activeCaptureToken;
         activeCaptureCardVisible = showCard;
         const cacheKey = getCurrentModelCacheKey();
+        const captureIdentity = getFollowerPreviewIdentity(cacheKey);
         const captureRevision = cardDropModelRevision;
         const prevCachedPreview = cachedPreview ? Object.assign({}, cachedPreview) : null;
         if (showCard) {
@@ -1426,7 +1433,7 @@
 
         try {
             const result = await captureAvatarPreview({ includeSourceDataUrl: manualCrop });
-            if (token !== activeCaptureToken) return;
+            if (token !== activeCaptureToken || !isCaptureRoleCurrent(captureIdentity)) return;
             if (captureRevision !== cardDropModelRevision) {
                 pendingAutoCapture = true;
                 return;
@@ -1437,21 +1444,23 @@
                 setPreviewStatus(translateLabel('chat.avatarPreviewCropping', '请调整裁剪区域'));
 
                 var srcDims = await measureImageDataUrl(result.sourceDataUrl);
-                if (token !== activeCaptureToken || captureRevision !== cardDropModelRevision) return;
+                if (token !== activeCaptureToken || captureRevision !== cardDropModelRevision ||
+                    !isCaptureRoleCurrent(captureIdentity)) return;
                 var defRect = result.cropRectPixels || null;
 
                 async function recaptureCropperSource() {
                     var freshCacheKey = getCurrentModelCacheKey();
                     var freshRevision = cardDropModelRevision;
                     var fresh = await captureAvatarPreview({ includeSourceDataUrl: true });
-                    if (freshRevision !== cardDropModelRevision) {
+                    if (freshRevision !== cardDropModelRevision || !isCaptureRoleCurrent(captureIdentity)) {
                         throw new Error(translateLabel('chat.avatarPreviewFailed', '生成头像失败'));
                     }
                     if (!fresh || !fresh.sourceDataUrl) {
                         throw new Error(translateLabel('chat.avatarPreviewFailed', '生成头像失败'));
                     }
                     var dims = await measureImageDataUrl(fresh.sourceDataUrl);
-                    if (token !== activeCaptureToken || freshRevision !== cardDropModelRevision) {
+                    if (token !== activeCaptureToken || freshRevision !== cardDropModelRevision ||
+                        !isCaptureRoleCurrent(captureIdentity)) {
                         throw new Error(translateLabel('chat.avatarPreviewFailed', '生成头像失败'));
                     }
                     return {
@@ -1471,7 +1480,7 @@
                     modelRevision: captureRevision,
                     recaptureFn: recaptureCropperSource
                 });
-                if (token !== activeCaptureToken) return;
+                if (token !== activeCaptureToken || !isCaptureRoleCurrent(captureIdentity)) return;
 
                 if (userCrop) {
                     var croppedDataUrl = await cropSourceToAvatar(userCrop.sourceDataUrl, userCrop.cropRect);
@@ -1479,7 +1488,8 @@
                     applyPreviewResult(
                         { dataUrl: croppedDataUrl, modelType: userCrop.modelType || result.modelType },
                         userCrop.cacheKey || cacheKey,
-                        userCrop.modelRevision || captureRevision
+                        userCrop.modelRevision || captureRevision,
+                        captureIdentity
                     );
                 } else {
                     if (captureRevision !== cardDropModelRevision) {
@@ -1499,7 +1509,7 @@
                     setPreviewNote(translateLabel('chat.avatarPreviewCropCancelled', '已取消手动裁剪，保持原头像不变。'));
                 }
             } else {
-                applyPreviewResult(result, cacheKey, captureRevision);
+                applyPreviewResult(result, cacheKey, captureRevision, captureIdentity);
             }
         } catch (error) {
             if (token !== activeCaptureToken) return;
@@ -1508,7 +1518,7 @@
                 // A local capture may mask a still-valid portrait from the Pet owner.
                 const fallback = isCardDropIdentityFollowerWindow()
                     ? [modelPreviewForDisplay(), externalAvatarPreview]
-                        .find(preview => getExternalAvatarScope(preview) === 'current')
+                        .find(preview => !preview?.captureIdentity && getExternalAvatarScope(preview) === 'current')
                     : null;
                 const failed = translateLabel('chat.avatarPreviewFailed', '生成头像失败');
                 setPreviewImage(fallback?.dataUrl || '');

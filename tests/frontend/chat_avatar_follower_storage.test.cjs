@@ -88,6 +88,11 @@ function run(pathname, order, {cold = false, pngtuber = false, autoload = true, 
             setItem(key, value) { writes.push(key); stored.set(key, value); },
         },
         fetch: async (url, options) => {
+            if (url === '/api/config/page_config?lanlan_name=B') {
+                return {ok: true, json: async () => ({
+                    success: true, lanlan_name: 'B', model_type: 'vrm', model_path: '/A.vrm',
+                })};
+            }
             if (options?.method === 'POST') network.push({url, body: JSON.parse(options.body)});
             return {ok: true, json: async () => ({'猫娘': {A: {}, B: {}}})};
         },
@@ -337,3 +342,55 @@ for (const pathname of ['/chat', '/chat_full']) {
         });
     }
 }
+
+for (const pathname of ['/chat', '/chat_full']) {
+    for (const phase of ['completed', 'late']) {
+        test(pathname + ': a ' + phase + ' IPC capture for A cannot be reused after B commits the same model', async () => {
+            const h = run(pathname, 'no IPC', {cold: true, autoload: false, transport: 'ipc'});
+            const w = h.window, avatar = w.appChatAvatar;
+            h.fireCapture();
+            if (phase === 'completed') {
+                h.complete(captured);
+                await tick();
+                assert.equal(avatar.getModelAvatarDataUrl(), captured, 'current capture remains supported');
+            }
+
+            Object.assign(w.lanlan_config, {lanlan_name: 'B', switch_revision: 84});
+            avatar.onCharacterScopeCommitted('B', 84, true);
+            await tick();
+            if (phase === 'late') {
+                h.complete(captured);
+                await tick();
+            }
+
+            assert.equal(avatar.getModelAvatarDataUrl(), '', 'an A capture is not a B portrait even when the model key is unchanged');
+            assert.equal(avatar.hasCurrentModelAvatar(), false);
+            const pending = avatar.showPopup(null, {forceRefresh: true, showCard: false});
+            h.complete(mirrored);
+            await pending;
+            assert.equal(avatar.getModelAvatarDataUrl(), mirrored, 'a capture started within B still works');
+            assert.equal(avatar.hasCurrentModelAvatar(), true);
+            assert.deepEqual(h.writes, []);
+            assert.deepEqual(h.network, []);
+        });
+    }
+}
+
+test('follower captures verify name and receipt independently of the rendered model key', async () => {
+    for (const target of [
+        {name: 'B', receipt: 0, pageRevision: 83},
+        {name: 'A', receipt: 84, pageRevision: 84},
+    ]) {
+        const h = run('/chat', 'no IPC', {cold: true, autoload: false, transport: 'ipc'});
+        const avatar = h.window.appChatAvatar;
+        h.fireCapture();
+        h.complete(captured);
+        await tick();
+        assert.equal(avatar.getModelAvatarDataUrl(), captured);
+        Object.assign(h.window.lanlan_config, {lanlan_name: target.name, switch_revision: target.pageRevision});
+        avatar.onCharacterScopeCommitted(target.name, target.receipt, target.name !== 'A');
+        await tick();
+        assert.equal(avatar.getModelAvatarDataUrl(), '');
+        assert.equal(avatar.hasCurrentModelAvatar(), false);
+    }
+});
