@@ -89,6 +89,10 @@ describe('itemUsage', () => {
     expect(itemUsage(item({ permission: NET, state: 'denied' }), covered)).toBeNull()
     expect(itemUsage(item({ permission: NET, state: 'granted', unused_30d: true }), covered)).toEqual({ kind: 'unused30d' })
   })
+  it('shows the last use of a system permission the server reports', () => {
+    const last = { at: '2026-11-28T06:00:00Z', origin_kind: null, outcome: 'allowed' as const }
+    expect(itemUsage(item({ permission: NET, last_used: last }), covered)).toMatchObject({ kind: 'last', at: last.at })
+  })
 })
 
 describe('pluginLines', () => {
@@ -150,6 +154,16 @@ describe('switchRequest', () => {
     expect(switchRequest({ permission: MEMORY }, true, optional)).toEqual({ kind: 'decide', state: 'granted', condition: 'in_use' })
     expect(switchRequest({ permission: MEMORY }, false)).toEqual({ kind: 'decide', state: 'denied', condition: 'in_use' })
     expect(switchRequest({ permission: PUSH }, false)).toEqual({ kind: 'clear' })
+  })
+
+  it('keeps a stored "any time" while the declaration cannot be read', () => {
+    const held = row({ permission: MEMORY, state: 'denied', condition: 'anytime', anytime_allowed: null })
+    expect(switchRequest({ permission: MEMORY }, true, held)).toEqual({ kind: 'decide', state: 'granted', condition: 'anytime' })
+  })
+
+  it('does not send a stored "any time" the server no longer allows', () => {
+    const legacy = row({ permission: MEMORY, state: 'denied', condition: 'anytime', anytime_allowed: false, legacy_any: true })
+    expect(switchRequest({ permission: MEMORY }, true, legacy)).toEqual({ kind: 'decide', state: 'granted', condition: 'in_use' })
   })
 })
 
