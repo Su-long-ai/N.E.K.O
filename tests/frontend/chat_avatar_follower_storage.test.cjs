@@ -14,10 +14,11 @@ const pngtuberCacheKey = 'pngtuber:' + JSON.stringify({
     layeredMetadata: '', idleImage: '/idle.png', talkingImage: '',
 });
 
-function run(pathname, order, {cold = false, pngtuber = false, autoload = true, transport = null} = {}) {
+function run(pathname, order, {cold = false, pngtuber = false, autoload = true, transport = null, modelPathB = '/A.vrm'} = {}) {
     const writes = [];
     const network = [];
     const seen = [];
+    const scopes = [];
     const listeners = new Map();
     const timers = new Map();
     let nextTimer = 0;
@@ -61,6 +62,7 @@ function run(pathname, order, {cold = false, pngtuber = false, autoload = true, 
         },
         dispatchEvent(event) {
             if (event.type === 'chat-avatar-preview-updated') seen.push(event.detail);
+            if (event.type === 'neko:avatar-scope-committed') scopes.push(event.detail);
             for (const handler of listeners.get(event.type) ?? []) handler(event);
         },
     };
@@ -90,7 +92,7 @@ function run(pathname, order, {cold = false, pngtuber = false, autoload = true, 
         fetch: async (url, options) => {
             if (url === '/api/config/page_config?lanlan_name=B') {
                 return {ok: true, json: async () => ({
-                    success: true, lanlan_name: 'B', model_type: 'vrm', model_path: '/A.vrm',
+                    success: true, lanlan_name: 'B', model_type: 'vrm', model_path: modelPathB,
                 })};
             }
             if (options?.method === 'POST') network.push({url, body: JSON.parse(options.body)});
@@ -104,7 +106,7 @@ function run(pathname, order, {cold = false, pngtuber = false, autoload = true, 
     if (order === 'after init') window.appChatAvatar.setExternalAvatar(mirrored, modelType);
     if (autoload) window.dispatchEvent({type: 'vrm-model-loaded'});
     return {
-        image, status, writes, stored, network, seen, window, putOwner, timers,
+        image, status, writes, stored, network, seen, scopes, window, putOwner, timers,
         requestCount: () => requests,
         complete: (...args) => { assert.ok(releaseCapture); releaseCapture(...args); },
         fireCapture() {
@@ -428,4 +430,87 @@ test('Pet publishes the canonical PNGTuber fields as the Card Drop model identit
         assert.notEqual(publish({...sample, ...change}), key);
     }
     assert.equal(publish(undefined), '', 'missing configuration must not publish a placeholder model key');
+});
+
+async function committedVrmPair(pathname, petPath, pagePath, legacyCache = false) {
+    const pet = run('/', 'no IPC', {cold: true, autoload: false});
+    const follower = run(pathname, 'no IPC', {cold: true, autoload: false, modelPathB: pagePath});
+    const switches = {lanlan_name: 'B', switch_revision: 84};
+    Object.assign(pet.window.lanlan_config, switches);
+    Object.assign(follower.window.lanlan_config, switches);
+    const petAvatar = pet.window.appChatAvatar;
+    const followerAvatar = follower.window.appChatAvatar;
+    if (legacyCache) follower.putOwner('B', owner, 'vrm:' + petPath);
+    pet.window.vrmManager = {currentModel: {url: petPath}};
+    petAvatar.onCharacterScopeCommitted('B', 84);
+    petAvatar.setExternalAvatar(owner, 'vrm');
+    followerAvatar.onCharacterScopeCommitted('B', 84, true);
+    await tick();
+    const [request] = follower.scopes;
+    assert.equal(follower.scopes.length, 1);
+    return {petAvatar, followerAvatar, request, follower, ownerScope: pet.scopes[0]};
+}
+
+for (const [route, prefix] of [
+    ['/chat', '/user_vrm/'], ['/chat_full', '/static/vrm/'], ['/chat_full', '/workshop/'],
+]) {
+    test(route + ': scoped VRM portrait works for both encodings of local ' + prefix, async () => {
+        const petPath = prefix + "N%20(1)!'*.vrm";
+        // Exact difference produced by Python quote(safe='/') vs. encodeURIComponent.
+        const pagePath = prefix + 'N%20%281%29%21%27%2A.vrm';
+        const {petAvatar, followerAvatar, request, follower} = await committedVrmPair(route, petPath, pagePath);
+        for (const stale of [{...request, name: 'A'}, {...request, revision: 83}]) {
+            assert.equal(petAvatar.getScopedOwnerPreview(stale), null);
+            followerAvatar.setScopedExternalAvatar(mirrored, 'vrm', stale);
+        }
+        assert.equal(followerAvatar.getModelAvatarDataUrl(), '');
+        const response = petAvatar.getScopedOwnerPreview(request);
+        assert.equal(response?.dataUrl, owner, 'Pet must answer the follower’s committed request');
+        followerAvatar.setScopedExternalAvatar(response.dataUrl, response.modelType, request);
+        assert.equal(followerAvatar.getModelAvatarDataUrl(), owner);
+        assert.deepEqual(follower.writes, []);
+        assert.equal(follower.stored.get('neko_avatar:B'), undefined);
+    });
+}
+
+test('local VRM legacy cache remains readable without rewriting it', async () => {
+    const petPath = '/user_vrm/N%20(1).vrm';
+    const {followerAvatar, follower} = await committedVrmPair(
+        '/chat', petPath, '/user_vrm/N%20%281%29.vrm', true,
+    );
+    assert.equal(followerAvatar.getModelAvatarDataUrl(), owner);
+    assert.deepEqual(follower.writes, []);
+    assert.equal(JSON.parse(follower.stored.get('neko_avatar:B')).cacheKey, 'vrm:' + petPath);
+});
+
+test('VRM scope keeps distinct paths, opaque URL syntax and other origins distinct', async () => {
+    for (const [petPath, pagePath] of [
+        ['/user_vrm/one/(N).vrm', '/user_vrm/one%2F%28N%29.vrm'],
+        ['/user_vrm/N%25281%2529.vrm', '/user_vrm/N%281%29.vrm'],
+        ['/user_vrm/N%2b(1).vrm', '/user_vrm/N+%281%29.vrm'],
+        ['/user_vrm/N(1).vrm', '/static/vrm/N%281%29.vrm'],
+        ['/user_vrm/N(1).vrm?rev=1', '/user_vrm/N%281%29.vrm?rev=1'],
+        ['/user_vrm/N(1).vrm?rev=1', '/user_vrm/N%281%29.vrm%3Frev%3D1'],
+        ['/user_vrm/N(1).vrm#x', '/user_vrm/N%281%29.vrm%23x'],
+        ['/user_vrm/N%(1).vrm', '/user_vrm/N%%281%29.vrm'],
+        ['/user_vrm/../other/N(1).vrm', '/user_vrm/../other/N%281%29.vrm'],
+        ['/user_vrm/%2e./other/N(1).vrm', '/user_vrm/%2e./other/N%281%29.vrm'],
+        ['/custom/N(1).vrm', '/custom/N%281%29.vrm'],
+        ['//example.test/user_vrm/N(1).vrm', '//example.test/user_vrm/N%281%29.vrm'],
+        ['https://example.test/user_vrm/N(1).vrm', 'https://example.test/user_vrm/N%281%29.vrm'],
+    ]) {
+        const {petAvatar, followerAvatar, request, ownerScope, follower} = await committedVrmPair(
+            '/chat', petPath, pagePath,
+        );
+        assert.equal(petAvatar.getScopedOwnerPreview(request), null, [petPath, pagePath].join(' vs '));
+        followerAvatar.setScopedExternalAvatar(owner, 'vrm', ownerScope);
+        assert.equal(followerAvatar.getModelAvatarDataUrl(), '');
+        assert.deepEqual(follower.writes, []);
+    }
+    const exact = 'https://example.test/user_vrm/N(1).vrm?variant=portrait#current';
+    const {petAvatar, followerAvatar, request} = await committedVrmPair('/chat', exact, exact);
+    const response = petAvatar.getScopedOwnerPreview(request);
+    assert.equal(response?.dataUrl, owner, 'opaque URLs still work when exactly equal');
+    followerAvatar.setScopedExternalAvatar(response.dataUrl, response.modelType, request);
+    assert.equal(followerAvatar.getModelAvatarDataUrl(), owner);
 });

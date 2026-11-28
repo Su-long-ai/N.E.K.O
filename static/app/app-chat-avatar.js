@@ -94,12 +94,12 @@
             var raw = localStorage.getItem(key);
             if (!raw) return null;
             var parsed = JSON.parse(raw);
-            if (
-                parsed
-                && parsed.dataUrl
-                && parsed.cacheKey
-                && parsed.cacheKey === getCurrentModelCacheKey()
-            ) return parsed;
+            const storedKey = parsed?.cacheKey;
+            const cacheKey = parsed?.modelType === 'vrm' && typeof storedKey === 'string' && storedKey.startsWith('vrm:')
+                ? vrmCacheKey(storedKey.slice(4)) : storedKey;
+            if (parsed?.dataUrl && cacheKey && cacheKey === getCurrentModelCacheKey()) {
+                return { ...parsed, cacheKey };
+            }
         } catch (_) { /* 损坏数据 — 忽略 */ }
         return null;
     }
@@ -394,7 +394,7 @@
             return pngtuberCacheKey(window.pngtuberManager?.config || window.lanlan_config?.pngtuber);
         }
         if (modelType === 'vrm') {
-            return 'vrm:' + String(
+            return vrmCacheKey(
                 window.vrmManager?.currentModel?.url ||
                 window.vrmModel ||
                 window.lanlan_config?.vrm ||
@@ -414,6 +414,16 @@
             window.cubism4Model ||
             ''
         );
+    }
+
+    function vrmCacheKey(value) {
+        const path = String(value || '');
+        // Only reconcile the five characters Python quote escapes and encodeURIComponent leaves raw.
+        // Do not parse or rewrite URL syntax or use the cache key to load a model.
+        const local = /^\/(?:user_vrm|static\/vrm|workshop)\//.test(path) &&
+            !/[?#\\]|%(?![\da-f]{2})|%2f|%5c|\/(?:\.|%2e){1,2}(?:\/|$)/i.test(path);
+        return 'vrm:' + (local ? path.replace(/[!'()*]/g, char =>
+            '%' + char.charCodeAt(0).toString(16).toUpperCase()) : path);
     }
 
     function pngtuberCacheKey(config) {
@@ -1880,8 +1890,9 @@
                         window.lanlan_config?.lanlan_name !== name || getCurrentModelType() !== model.type ||
                         window.lanlan_config.switch_revision !== observedRevision ||
                         modelTypeFromConfig(data) !== model.type) return;
+                    const path = typeof data.model_path === 'string' ? data.model_path.trim() : '';
                     model.key = model.type === 'pngtuber' ? pngtuberCacheKey(data.pngtuber)
-                        : model.type + ':' + (typeof data.model_path === 'string' ? data.model_path.trim() : '');
+                        : model.type === 'vrm' ? vrmCacheKey(path) : model.type + ':' + path;
                     if (model.key.endsWith(':')) { model.key = ''; return; }
                     mod.onCharacterScopeCommitted(name, revision);
                 }).catch(() => { /* No verified model identity; do not request with the bootstrap key. */ });
