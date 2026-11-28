@@ -261,7 +261,6 @@ class ChatOpenAI:
 
         sync_http = None
         created_aclient = None
-        created_client = None
         try:
             sync_http = DefaultHttpxClient(**http_kw)
             if keepalive_expiry is not None:
@@ -278,13 +277,7 @@ class ChatOpenAI:
                 _close_async_openai_client_from_sync_best_effort(created_aclient)
             elif not borrowed:
                 _close_async_openai_client_from_sync_best_effort(async_http)
-            if created_client is not None:
-                try:
-                    created_client.close()
-                except Exception:
-                    # Best-effort cleanup when constructor fails midway.
-                    pass
-            elif sync_http is not None:
+            if sync_http is not None:
                 try:
                     sync_http.close()
                 except Exception:

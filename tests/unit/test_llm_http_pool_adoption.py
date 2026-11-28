@@ -984,3 +984,19 @@ async def test_gc_finalizer_release_while_holding_pool_lock_does_not_deadlock(mo
         await llm2.aclose()
     finally:
         await close_warm_chat_llms()
+
+
+@pytest.mark.asyncio
+async def test_create_chat_llm_async_does_not_treat_magicmock_as_closed_borrowed_client():
+    from unittest.mock import MagicMock, patch
+
+    from utils.llm_client import create_chat_llm_async
+
+    fake_llm = MagicMock()
+    with patch("utils.llm_client.create_chat_llm", return_value=fake_llm) as factory:
+        got = await create_chat_llm_async(
+            "m", "https://mock.example.test/v1", "k", max_completion_tokens=16, timeout=10.0
+        )
+
+    assert got is fake_llm
+    assert factory.call_count == 1

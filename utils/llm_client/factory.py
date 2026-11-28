@@ -155,11 +155,11 @@ create_chat_llm._original_impl = create_chat_llm
 
 
 def _is_borrowed_async_http_closed(llm: Any) -> bool:
-    if not getattr(llm, "_borrowed_async_http", False):
+    if getattr(llm, "_borrowed_async_http", False) is not True:
         return False
     aclient = getattr(llm, "_aclient", None)
     underlying = getattr(aclient, "_client", None)
-    return bool(getattr(underlying, "is_closed", False))
+    return getattr(underlying, "is_closed", False) is True
 
 
 async def create_chat_llm_async(*args: Any, **kwargs: Any) -> "ChatOpenAI | ChatAnthropic":

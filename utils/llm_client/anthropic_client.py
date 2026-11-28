@@ -944,15 +944,12 @@ class ChatAnthropic:
                 async_kw["http_client"] = async_http
 
         created_client = None
-        created_aclient = None
         try:
             created_client = anthropic_cls(**sync_kw)
             created_aclient = async_anthropic_cls(**async_kw)
         except BaseException:
             if release_borrowed is not None:
                 release_borrowed()
-            elif created_aclient is not None:
-                _close_async_openai_client_from_sync_best_effort(created_aclient)
             elif not borrowed and async_http is not None:
                 _close_async_openai_client_from_sync_best_effort(async_http)
             if created_client is not None:

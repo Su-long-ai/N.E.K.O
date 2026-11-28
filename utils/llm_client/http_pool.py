@@ -358,12 +358,11 @@ def acquire_shared_async_http_client(
 
     loser = None
     evicted_idle: list[Any] = []
+    chosen_entry: _SharedPoolEntry | None = None
     with _POOL_LOCK:
         if not _is_loop_accepting_locked(loop, expected_epoch):
             loser = made
             _register_pending_close_client_locked(loop, loser)
-            chosen_entry = None
-            release_cb = None
         else:
             pool = _http_pools.get(loop)
             if pool is None:
@@ -396,15 +395,14 @@ def acquire_shared_async_http_client(
                             draining = set()
                             _draining_pools[loop] = draining
                         draining.add(evicted)
-            release_cb = _make_release(loop, chosen_entry)
 
     if loser is not None:
         _schedule_close_on_loop(loop, loser)
     for idle_client in evicted_idle:
         _schedule_close_on_loop(loop, idle_client)
-    if chosen_entry is None or release_cb is None:
+    if chosen_entry is None:
         return (None, None)
-    return (chosen_entry.client, release_cb)
+    return (chosen_entry.client, _make_release(loop, chosen_entry))
 
 
 async def aclose_shared_llm_http_clients() -> None:
