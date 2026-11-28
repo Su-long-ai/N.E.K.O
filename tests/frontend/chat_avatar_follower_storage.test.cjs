@@ -394,3 +394,38 @@ test('follower captures verify name and receipt independently of the rendered mo
         assert.equal(avatar.hasCurrentModelAvatar(), false);
     }
 });
+
+test('Pet publishes the canonical PNGTuber fields as the Card Drop model identity', () => {
+    const h = run('/', 'no IPC', {cold: true, pngtuber: true, autoload: false});
+    const w = h.window;
+    const sample = {
+        layered_metadata: {z: 1, a: {y: 2, b: 3}},
+        idle_image: '/idle.png',
+        talking_image: '/talk.png',
+    };
+    function publish(config) {
+        w.pngtuberManager.config = config;
+        h.network.length = 0;
+        w.appChatAvatar.setExternalAvatar(owner, 'pngtuber');
+        const posts = h.network.filter(x => x.url === '/api/card-drop/active-character');
+        assert.equal(posts.length, 1);
+        assert.equal(posts[0].body.modelType, 'pngtuber');
+        assert.equal(typeof posts[0].body.modelRevision, 'number');
+        return posts[0].body.modelKey;
+    }
+    const key = publish(sample);
+    assert.equal(key, 'pngtuber:' + JSON.stringify({
+        layeredMetadata: '{"a":{"b":3,"y":2},"z":1}',
+        idleImage: '/idle.png',
+        talkingImage: '/talk.png',
+    }));
+    assert.equal(publish({...sample, layered_metadata: {a: {b: 3, y: 2}, z: 1}}), key);
+    for (const change of [
+        {layered_metadata: {a: {b: 4, y: 2}, z: 1}},
+        {idle_image: '/other-idle.png'},
+        {talking_image: '/other-talk.png'},
+    ]) {
+        assert.notEqual(publish({...sample, ...change}), key);
+    }
+    assert.equal(publish(undefined), '', 'missing configuration must not publish a placeholder model key');
+});

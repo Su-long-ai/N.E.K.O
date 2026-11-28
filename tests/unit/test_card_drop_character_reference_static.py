@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -50,12 +51,11 @@ def test_card_drop_snapshot_is_bound_to_current_model_identity():
     source = _read(APP_CHAT_AVATAR_PATH)
 
     assert "if (modelType === 'pngtuber') return 'pngtuber';" in source
-    assert "config.layered_metadata" in source
-    assert "config.idle_image" in source
-    assert "config.talking_image" in source
+    for field in ("layered_metadata", "idle_image", "talking_image"):
+        assert re.search(rf"normalizeModelIdentityPart\(config(?:\?\.|\.){field}\)", source)
     assert "function normalizeModelIdentityPart(value)" in source
     assert "Object.keys(nestedValue).sort()" in source
-    assert "return 'pngtuber:' + JSON.stringify(identity);" in source
+    assert re.search(r"return 'pngtuber:' \+ [^\n]*JSON.stringify\(identity\)", source)
     assert "window.vrmManager?.currentModel?.url" in source
     assert "window.vrmModel" in source
     assert "function appendCardDropModelIdentity(body, options = {})" in source
@@ -70,7 +70,9 @@ def test_card_drop_snapshot_is_bound_to_current_model_identity():
     assert "cacheKey !== getCurrentModelCacheKey()" in source
     assert "captureRevision !== cardDropModelRevision" in source
     assert "const captureRevision = cardDropModelRevision;" in source
-    assert "applyPreviewResult(result, cacheKey, captureRevision);" in source
+    assert re.search(
+        r"applyPreviewResult\(result, cacheKey, captureRevision(?:, captureIdentity)?\);", source
+    )
     assert "pendingAutoCapture = true;" in source
     assert "window.addEventListener('pngtuber-model-loaded'" in source
 
